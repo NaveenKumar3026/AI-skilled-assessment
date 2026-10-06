@@ -1,0 +1,297 @@
+// SQLite Schema for SkillSet AI local standalone execution
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  phone        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("CANDIDATE") // CANDIDATE, ASSESSOR, ADMIN
+  language     String   @default("en")
+  avatarUrl    String?
+  location     String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  candidateProfile CandidateProfile?
+  assessorReviews  AssessorReview[]
+  auditLogs        AuditLog[]
+
+  @@map("users")
+}
+
+model CandidateProfile {
+  id                    String    @id @default(uuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age                   Int?
+  yearsOfExperience     Int       @default(0)
+  primaryTrade          String    @default("")
+  profileCompletion     Int       @default(0)
+  nsqfTargetLevel       Int       @default(4)
+  selectedJobRoleId     String?
+  selectedJobRole       JobRole?  @relation(fields: [selectedJobRoleId], references: [id])
+  experienceDescription String?
+  experienceConfidence  Int       @default(0)
+  assessmentStatus      String    @default("NOT_STARTED") // NOT_STARTED, PROFILING, KNOWLEDGE_IN_PROGRESS, VOICE_IN_PROGRESS, PRACTICAL_IN_PROGRESS, EVIDENCE_UPLOADED, UNDER_ASSESSOR_REVIEW, CERTIFIED, REASSESSMENT_NEEDED
+  overallScore          Float     @default(0)
+  knowledgeScore        Float     @default(0)
+  practicalScore        Float     @default(0)
+  safetyScore           Float     @default(0)
+  evidenceScore         Float     @default(0)
+  communicationScore    Float     @default(0)
+  assessorRemarks       String?
+  assessorDecision      String?   // PENDING, APPROVED, REQUEST_REASSESSMENT, REJECTED
+  certificateId         String?
+  certifiedAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  experiences          Experience[]
+  skills               Skill[]
+  assessments          Assessment[]
+  practicalAssessments PracticalAssessment[]
+  evidences            Evidence[]
+  skillScore           SkillScore?
+  skillGaps            SkillGap[]
+  assessorReviews      AssessorReview[]
+  certification        Certification?
+
+  @@map("candidate_profiles")
+}
+
+model Experience {
+  id                 String           @id @default(uuid())
+  candidateProfileId String
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  description        String
+  yearsOfExperience  Int              @default(0)
+  employer           String?
+  role               String?
+  location           String?
+  createdAt          DateTime         @default(now())
+
+  @@map("experiences")
+}
+
+model Skill {
+  id                 String           @id @default(uuid())
+  candidateProfileId String
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  name               String
+  category           String           // CORE, SAFETY, TOOL, DIAGNOSTIC, SOFT
+  confidence         Float            @default(0)
+  level              String           @default("BASIC") // BASIC, INTERMEDIATE, ADVANCED, EXPERT
+  verifiedByAssessor Boolean          @default(false)
+  createdAt          DateTime         @default(now())
+
+  @@map("skills")
+}
+
+model JobRole {
+  id                       String   @id @default(uuid())
+  title                    String
+  sector                   String
+  nsqfLevel                Int      @default(4)
+  description              String
+  requiredSkills           String   @default("[]") // JSON array string
+  certifiedCandidatesCount Int      @default(0)
+  demandLevel              String   @default("HIGH") // VERY_HIGH, HIGH, MODERATE
+  avgSalaryGrowth          String   @default("")
+  createdAt                DateTime @default(now())
+
+  questions         Question[]
+  assessments       Assessment[]
+  candidateProfiles CandidateProfile[]
+
+  @@map("job_roles")
+}
+
+model Assessment {
+  id                 String    @id @default(uuid())
+  candidateProfileId String
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  jobRoleId          String
+  jobRole            JobRole   @relation(fields: [jobRoleId], references: [id])
+  type               String    @default("KNOWLEDGE") // KNOWLEDGE, VOICE, PRACTICAL
+  status             String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, REVIEWED
+  totalQuestions     Int       @default(0)
+  answeredQuestions  Int       @default(0)
+  score              Float?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  responses      AssessmentResponse[]
+  assessorReview AssessorReview?
+
+  @@map("assessments")
+}
+
+model Question {
+  id                  String   @id @default(uuid())
+  jobRoleId           String
+  jobRole             JobRole  @relation(fields: [jobRoleId], references: [id])
+  competency          String
+  difficultyLevel     Int      @default(1)
+  questionText        String
+  questionTextTa      String?
+  questionTextHi      String?
+  options             String   // JSON string
+  correctOptionId     String
+  explanation         String
+  simpleExplanation   String
+  simpleExplanationTa String?
+  simpleExplanationHi String?
+  createdAt           DateTime @default(now())
+
+  responses AssessmentResponse[]
+
+  @@map("questions")
+}
+
+model AssessmentResponse {
+  id               String     @id @default(uuid())
+  assessmentId     String
+  assessment       Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  questionId       String
+  question         Question   @relation(fields: [questionId], references: [id])
+  selectedOptionId String
+  isCorrect        Boolean    @default(false)
+  answeredAt       DateTime   @default(now())
+
+  @@map("assessment_responses")
+}
+
+model PracticalAssessment {
+  id                     String           @id @default(uuid())
+  candidateProfileId     String
+  candidateProfile       CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  taskTitle              String
+  taskInstructions       String
+  videoUrl               String?
+  videoPath              String?
+  duration               String?
+  observations           String           @default("[]") // JSON string
+  timelineEvents         String           @default("[]") // JSON string
+  taskCompletionScore    Float            @default(0)
+  safetyComplianceScore  Float            @default(0)
+  toolHandlingScore      Float            @default(0)
+  procedureAccuracyScore Float            @default(0)
+  overallPracticalScore  Float            @default(0)
+  aiGenerated            Boolean          @default(true)
+  aiConfidence           Float            @default(0)
+  requiresHumanValidation Boolean         @default(true)
+  analyzedAt             DateTime?
+  createdAt              DateTime         @default(now())
+
+  @@map("practical_assessments")
+}
+
+model Evidence {
+  id                      String           @id @default(uuid())
+  candidateProfileId      String
+  candidateProfile        CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  fileName                String
+  fileType                String           // EXPERIENCE_LETTER, CONTRACTOR_AFFIDAVIT, SALARY_SLIP, SITE_PHOTO, ID_PROOF
+  fileSize                String
+  filePath                String
+  aiVerificationStatus    String           @default("PENDING") // PENDING, VERIFIED, NEEDS_REVIEW, FLAGGED
+  aiRelevanceScore        Float            @default(0)
+  extractedData           String?          // JSON string
+  aiGenerated             Boolean          @default(true)
+  aiConfidence            Float            @default(0)
+  requiresHumanValidation Boolean          @default(true)
+  uploadedAt              DateTime         @default(now())
+
+  @@map("evidences")
+}
+
+model SkillScore {
+  id                      String           @id @default(uuid())
+  candidateProfileId      String           @unique
+  candidateProfile        CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  knowledge               Float            @default(0)
+  practical               Float            @default(0)
+  safety                  Float            @default(0)
+  evidence                Float            @default(0)
+  communication           Float            @default(0)
+  overall                 Float            @default(0)
+  aiGenerated             Boolean          @default(true)
+  aiConfidence            Float            @default(0)
+  requiresHumanValidation Boolean          @default(true)
+  calculatedAt            DateTime         @default(now())
+
+  @@map("skill_scores")
+}
+
+model SkillGap {
+  id                   String           @id @default(uuid())
+  candidateProfileId   String
+  candidateProfile     CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+  skillName            String
+  currentLevelScore    Float            @default(0)
+  requiredLevelScore   Float            @default(0)
+  status               String           @default("GAP") // PASS, GAP, PARTIAL
+  bridgeModuleTitle    String?
+  bridgeModuleDuration String?
+  bridgeModulePartner  String?
+  bridgeModuleLinkUrl  String?
+  createdAt            DateTime         @default(now())
+
+  @@map("skill_gaps")
+}
+
+model AssessorReview {
+  id                 String           @id @default(uuid())
+  assessmentId       String           @unique
+  assessment         Assessment       @relation(fields: [assessmentId], references: [id])
+  assessorId         String
+  assessor           User             @relation(fields: [assessorId], references: [id])
+  candidateProfileId String
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id])
+  decision           String           // APPROVED, REQUEST_REASSESSMENT, REJECTED
+  remarks            String
+  scoreOverrides     String?          // JSON string
+  reviewedAt         DateTime         @default(now())
+
+  @@map("assessor_reviews")
+}
+
+model Certification {
+  id                 String           @id @default(uuid())
+  candidateProfileId String           @unique
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id])
+  certificateId      String           @unique
+  jobRoleTitle       String
+  nsqfLevel          Int              @default(4)
+  issuedAt           DateTime         @default(now())
+  expiresAt          DateTime?
+  isValid            Boolean          @default(true)
+
+  @@map("certifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorName  String
+  actorRole  String
+  action     String
+  details    String
+  entityType String?
+  entityId   String?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}
