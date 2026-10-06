@@ -54,8 +54,23 @@ export interface JwtPayload {
   email: string;
   role: UserRole;
   name: string;
+  sessionId?: string;
   iat?: number;
   exp?: number;
+}
+
+export interface RefreshTokenPayload {
+  userId: string;
+  sessionId: string;
+  tokenVersion?: number;
+  iat?: number;
+  exp?: number;
+}
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: string;
 }
 
 // ─── API Response ─────────────────────────────────────────────────────────────
@@ -67,11 +82,17 @@ export interface PaginationMeta {
   totalPages: number;
 }
 
+export interface ApiErrorDetail {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
-  error?: string;
+  error?: string | ApiErrorDetail;
   meta?: PaginationMeta;
 }
 
@@ -90,6 +111,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      sessionId?: string;
+      requestId?: string;
     }
   }
 }

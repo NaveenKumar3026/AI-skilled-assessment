@@ -1,7 +1,7 @@
 /**
  * SkillSet AI - Backend API Client
  * Connects the React frontend to the Express/Prisma backend.
- * All API calls go through this module.
+ * Hardened with automatic token refresh, safe error handling, and session rotation.
  */
 
 const API_BASE = '/api';
@@ -12,31 +12,105 @@ export const getToken = (): string | null => localStorage.getItem('skillset_toke
 export const setToken = (token: string): void => localStorage.setItem('skillset_token', token);
 export const removeToken = (): void => localStorage.removeItem('skillset_token');
 
+// Helper to get CSRF token from document.cookie if present
+function getCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 // ─── HTTP Client ─────────────────────────────────────────────────────────────
 
 type RequestOptions = {
   method?: string;
   body?: unknown;
   isFormData?: boolean;
+  retryOn401?: boolean;
 };
 
+let isRefreshing = false;
+let refreshSubscribers: ((token: string) => void)[] = [];
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers = [];
+}
+
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, isFormData = false } = options;
+  const { method = 'GET', body, isFormData = false, retryOn401 = true } = options;
   const token = getToken();
+  const csrfToken = getCsrfToken();
 
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
   if (!isFormData && body) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method,
     headers,
+    credentials: 'include', // Include HttpOnly cookies in API requests
     body: isFormData ? (body as FormData) : body ? JSON.stringify(body) : undefined,
   });
 
+  // Handle Token Refresh on 401 (Requirement 38)
+  if (res.status === 401 && retryOn401 && endpoint !== '/auth/login' && endpoint !== '/auth/refresh') {
+    if (!isRefreshing) {
+      isRefreshing = true;
+      try {
+        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          const newToken = refreshData.data?.token;
+          if (newToken) {
+            setToken(newToken);
+            onRefreshed(newToken);
+            isRefreshing = false;
+            // Retry original request with new token
+            return request<T>(endpoint, { ...options, retryOn401: false });
+          }
+        }
+      } catch {
+        // Refresh failed
+      } finally {
+        isRefreshing = false;
+      }
+
+      // If refresh failed, force logout
+      removeToken();
+      window.dispatchEvent(new CustomEvent('skillset:auth:unauthorized'));
+    } else {
+      // Queue concurrent requests while token is refreshing
+      return new Promise<T>((resolve, reject) => {
+        refreshSubscribers.push((newToken) => {
+          request<T>(endpoint, { ...options, retryOn401: false })
+            .then(resolve)
+            .catch(reject);
+        });
+      });
+    }
+  }
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: 'Network error' }));
-    throw new Error(err.message || err.error || `HTTP ${res.status}`);
+    if (res.status === 403) {
+      throw new Error('Access denied: You do not have permission to perform this action.');
+    }
+    if (res.status === 429) {
+      throw new Error('Too many requests. Please wait a moment before trying again.');
+    }
+
+    const err = await res.json().catch(() => ({ message: 'Network request failed' }));
+    const errorMessage =
+      (typeof err.error === 'object' && err.error?.message) ||
+      err.message ||
+      (typeof err.error === 'string' && err.error) ||
+      `HTTP error: ${res.status}`;
+    throw new Error(errorMessage);
   }
 
   return res.json() as Promise<T>;
@@ -48,7 +122,7 @@ export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   message?: string;
-  error?: string;
+  error?: string | { code: string; message: string };
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -68,6 +142,7 @@ export interface RegisterPayload {
   email: string;
   phone: string;
   password: string;
+  confirmPassword?: string;
   location: string;
   primaryTrade: string;
   yearsOfExperience: number;
@@ -82,6 +157,7 @@ export interface LoginPayload {
 export interface AuthResponse {
   user: AuthUser;
   token: string;
+  refreshToken?: string;
   candidateProfile?: unknown;
 }
 
@@ -93,12 +169,30 @@ export const authApi = {
     request<ApiResponse<AuthResponse>>('/auth/login', { method: 'POST', body: data }),
 
   getMe: () => request<ApiResponse<AuthUser>>('/auth/me'),
+
+  refresh: () => request<ApiResponse<{ token: string; user: AuthUser }>>('/auth/refresh', { method: 'POST' }),
+
+  logout: async () => {
+    try {
+      await request<ApiResponse<{ loggedOut: boolean }>>('/auth/logout', { method: 'POST' });
+    } finally {
+      removeToken();
+    }
+  },
+
+  logoutAll: async () => {
+    try {
+      await request<ApiResponse<{ revokedCount: number }>>('/auth/logout-all', { method: 'POST' });
+    } finally {
+      removeToken();
+    }
+  },
 };
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export const healthApi = {
-  check: () => request<{ status: string; service: string; version: string; timestamp: string }>('/health'),
+  check: () => request<{ status: string; service: string }>('/health'),
 };
 
 // ─── Candidate ────────────────────────────────────────────────────────────────
@@ -182,6 +276,7 @@ export const evidenceApi = {
   list: () => request<ApiResponse<unknown[]>>('/evidence'),
   analyze: (id: string) =>
     request<ApiResponse<unknown>>(`/evidence/${id}/analyze`, { method: 'POST', body: {} }),
+  getDownloadUrl: (id: string) => `${API_BASE}/evidence/${id}/download`,
 };
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -218,6 +313,8 @@ export const certificationApi = {
     }),
   getCertifications: (candidateId: string) =>
     request<ApiResponse<unknown>>(`/certifications/${candidateId}`),
+  verify: (verificationId: string) =>
+    request<ApiResponse<unknown>>(`/certifications/verify/${verificationId}`),
 };
 
 // ─── Admin ────────────────────────────────────────────────────────────────────

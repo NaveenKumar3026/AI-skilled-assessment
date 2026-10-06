@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { EvidenceService } from '../services/evidence.service';
-import { successResponse } from '../utils/response';
+import fs from 'fs';
 import path from 'path';
+import { EvidenceService } from '../services/evidence.service';
+import { idParamSchema } from '../validators/common.validator';
+import { successResponse } from '../utils/response';
 
 export class EvidenceController {
   static async upload(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -19,7 +21,7 @@ export class EvidenceController {
         : `${fileSizeKb} KB`;
 
       const result = await EvidenceService.uploadEvidence(req.user!.id, {
-        fileName: file.originalname,
+        fileName: path.basename(file.originalname),
         fileType,
         fileSize,
         filePath: file.path,
@@ -42,8 +44,34 @@ export class EvidenceController {
 
   static async analyze(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await EvidenceService.analyzeEvidence(req.params.id, req.user!.id);
+      const { id } = idParamSchema.parse(req.params);
+      const result = await EvidenceService.analyzeEvidence(id, req.user!);
       res.status(200).json(successResponse(result, 'AI evidence analysis complete.'));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Secure Authorized Download Endpoint (Requirement 21)
+   * Streams file content instead of loading entire buffer in memory
+   */
+  static async download(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const fileData = await EvidenceService.getEvidenceForDownload(id, req.user!);
+
+      const safeDownloadName = path.basename(fileData.fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+      res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName}"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+
+      const stream = fs.createReadStream(fileData.filePath);
+      stream.on('error', (err) => {
+        next(err);
+      });
+      stream.pipe(res);
     } catch (err) {
       next(err);
     }

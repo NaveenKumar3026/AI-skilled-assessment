@@ -8,6 +8,7 @@ async function main() {
 
   // ─── Cleanup ──────────────────────────────────────────────────────────────
   await prisma.auditLog.deleteMany();
+  await prisma.session.deleteMany();
   await prisma.certification.deleteMany();
   await prisma.assessorReview.deleteMany();
   await prisma.skillGap.deleteMany();
@@ -543,6 +544,7 @@ async function main() {
     data: {
       candidateProfileId: arunProfile.id,
       certificateId: 'RPL-IND-2026-EL4-9842',
+      verificationId: 'RPL-7F4K-92MX-X8P2',
       jobRoleTitle: 'Electrician (Domestic & Commercial)',
       nsqfLevel: 4,
       issuedAt: new Date('2026-10-06'),

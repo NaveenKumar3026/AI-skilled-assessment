@@ -1,6 +1,9 @@
+import fs from 'fs';
+import path from 'path';
 import prisma from '../config/database';
 import { AIService } from './ai.service';
-import { EvidenceType } from '../types';
+import { AuthUser } from '../types';
+import { logAuditEvent } from '../middleware/audit.middleware';
 
 export class EvidenceService {
   static async uploadEvidence(
@@ -45,6 +48,14 @@ export class EvidenceService {
       },
     });
 
+    await logAuditEvent({
+      actorId: userId,
+      action: 'EVIDENCE_UPLOADED',
+      resourceType: 'Evidence',
+      resourceId: updatedEvidence.id,
+      details: `Uploaded evidence type ${data.fileType}: ${data.fileName}`,
+    });
+
     return { evidence: updatedEvidence, aiResult };
   }
 
@@ -58,9 +69,20 @@ export class EvidenceService {
     });
   }
 
-  static async analyzeEvidence(evidenceId: string, _userId: string) {
-    const evidence = await prisma.evidence.findUnique({ where: { id: evidenceId } });
+  /**
+   * Object-Level Authorization: Prevent IDOR (Requirement 5)
+   */
+  static async analyzeEvidence(evidenceId: string, user: AuthUser) {
+    const evidence = await prisma.evidence.findUnique({
+      where: { id: evidenceId },
+      include: { candidateProfile: true },
+    });
     if (!evidence) throw new Error('Evidence not found.');
+
+    // IDOR check: Candidates can only trigger analysis on their own evidence
+    if (user.role === 'CANDIDATE' && evidence.candidateProfile.userId !== user.id) {
+      throw new Error('Access denied: You do not own this evidence document.');
+    }
 
     const aiResult = await AIService.analyzeEvidence(evidence.fileName, evidence.fileType, evidence.filePath);
 
@@ -75,5 +97,32 @@ export class EvidenceService {
     });
 
     return { evidence: updated, aiResult };
+  }
+
+  /**
+   * Secure Authorized File Download (Requirement 21)
+   */
+  static async getEvidenceForDownload(evidenceId: string, user: AuthUser) {
+    const evidence = await prisma.evidence.findUnique({
+      where: { id: evidenceId },
+      include: { candidateProfile: true },
+    });
+    if (!evidence) throw new Error('Evidence not found.');
+
+    // IDOR Access verification
+    if (user.role === 'CANDIDATE' && evidence.candidateProfile.userId !== user.id) {
+      throw new Error('Access denied: You do not have permission to download this evidence document.');
+    }
+
+    const resolvedPath = path.resolve(evidence.filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error('Requested evidence file no longer exists on server.');
+    }
+
+    return {
+      filePath: resolvedPath,
+      fileName: evidence.fileName,
+      fileType: evidence.fileType,
+    };
   }
 }

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { AssessorService } from '../services/assessor.service';
 import { createReviewSchema, updateReviewSchema } from '../validators/assessor.validator';
+import { idParamSchema } from '../validators/common.validator';
 import { successResponse } from '../utils/response';
 
 export class AssessorController {
@@ -15,7 +16,8 @@ export class AssessorController {
 
   static async getAssessment(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const assessment = await AssessorService.getAssessmentForReview(req.params.id);
+      const { id } = idParamSchema.parse(req.params);
+      const assessment = await AssessorService.getAssessmentForReview(id);
       res.status(200).json(successResponse(assessment));
     } catch (err) {
       next(err);
@@ -34,8 +36,9 @@ export class AssessorController {
 
   static async updateReview(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const { id } = idParamSchema.parse(req.params);
       const data = updateReviewSchema.parse(req.body);
-      const review = await AssessorService.updateReview(req.params.id, req.user!.id, data);
+      const review = await AssessorService.updateReview(id, req.user!.id, data);
       res.status(200).json(successResponse(review, 'Review updated.'));
     } catch (err) {
       next(err);

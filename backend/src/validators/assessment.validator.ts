@@ -1,13 +1,14 @@
 import { z } from 'zod';
+import { safeIdSchema } from './common.validator';
 
 export const createAssessmentSchema = z.object({
-  jobRoleId: z.string().min(1, 'Job role ID is required'),
+  jobRoleId: safeIdSchema,
   type: z.enum(['KNOWLEDGE', 'VOICE', 'PRACTICAL']).default('KNOWLEDGE'),
 });
 
 export const submitResponseSchema = z.object({
-  questionId: z.string().min(1),
-  selectedOptionId: z.string().min(1),
+  questionId: safeIdSchema,
+  selectedOptionId: safeIdSchema,
 });
 
 export const submitAssessmentSchema = z.object({

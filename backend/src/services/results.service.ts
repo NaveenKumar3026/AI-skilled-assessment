@@ -1,9 +1,12 @@
 import prisma from '../config/database';
 import { AIService } from './ai.service';
-import { GapStatus } from '../types';
+import { AuthUser } from '../types';
 
 export class ResultsService {
-  static async getAssessmentResults(assessmentId: string) {
+  /**
+   * Object-Level Authorization: Prevent IDOR (Requirement 5)
+   */
+  static async getAssessmentResults(assessmentId: string, user: AuthUser) {
     const assessment = await prisma.assessment.findUnique({
       where: { id: assessmentId },
       include: {
@@ -11,7 +14,7 @@ export class ResultsService {
         responses: { include: { question: true } },
         candidateProfile: {
           include: {
-            user: { select: { name: true } },
+            user: { select: { id: true, name: true } },
             skillScore: true,
             skillGaps: true,
           },
@@ -20,6 +23,11 @@ export class ResultsService {
       },
     });
     if (!assessment) throw new Error('Assessment not found.');
+
+    // IDOR check: Candidate can only access their own assessment results
+    if (user.role === 'CANDIDATE' && assessment.candidateProfile.user.id !== user.id) {
+      throw new Error('Access denied: You do not own these assessment results.');
+    }
 
     const profile = assessment.candidateProfile;
     const scores = {
@@ -40,20 +48,27 @@ export class ResultsService {
     };
   }
 
-  static async getSkillGaps(candidateProfileId: string) {
+  /**
+   * Object-Level Authorization: Prevent IDOR on Skill Gaps (Requirement 5)
+   */
+  static async getSkillGaps(candidateProfileId: string, user: AuthUser) {
+    const profile = await prisma.candidateProfile.findUnique({
+      where: { id: candidateProfileId },
+      include: { skills: true },
+    });
+    if (!profile) throw new Error('Candidate profile not found.');
+
+    // IDOR check
+    if (user.role === 'CANDIDATE' && profile.userId !== user.id) {
+      throw new Error('Access denied: You cannot view skill gaps of another candidate.');
+    }
+
     const gaps = await prisma.skillGap.findMany({
       where: { candidateProfileId },
       orderBy: { status: 'asc' },
     });
 
     if (gaps.length === 0) {
-      // Generate from AI if not yet in DB
-      const profile = await prisma.candidateProfile.findUnique({
-        where: { id: candidateProfileId },
-        include: { skills: true },
-      });
-      if (!profile) throw new Error('Candidate profile not found.');
-
       return ResultsService.calculateAndSaveSkillGaps(candidateProfileId, profile.selectedJobRoleId || 'role-electrician-l4');
     }
 

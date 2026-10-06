@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { ExperienceController } from '../controllers/experience.controller';
-import { authenticate } from '../middleware/auth.middleware';
+import { requireAuth } from '../middleware/auth.middleware';
+import { aiLimiter } from '../middleware/rateLimit.middleware';
 
 const router = Router();
 
-router.use(authenticate);
+router.use(requireAuth);
 router.get('/', ExperienceController.list);
 router.post('/', ExperienceController.add);
-router.post('/analyze', ExperienceController.analyze);
+router.post('/analyze', aiLimiter, ExperienceController.analyze);
 
 export default router;
